@@ -1,0 +1,192 @@
+<div class="layout-container">
+  <!-- Header Principal -->
+  <header class="main-header">
+    <div class="brand">
+      <div class="logo-badge">🚢 IA</div>
+      <div>
+        <h1>Logistics & Import AI Core</h1>
+        <p class="subtitle">Monitor Inteligente de Contenedores y Comercio Exterior</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- Métricas KPI -->
+  <section class="kpi-grid">
+    <div class="kpi-card total">
+      <div class="kpi-label">Total Embarques</div>
+      <div class="kpi-value">{{ shipmentService.totalContainers() }}</div>
+      <div class="kpi-hint">Contenedores registrados</div>
+    </div>
+    <div class="kpi-card alert">
+      <div class="kpi-label">Alerta Inspección (DIAN / INVIMA)</div>
+      <div class="kpi-value">{{ shipmentService.delayedContainers() }}</div>
+      <div class="kpi-hint">En aforo físico en puerto</div>
+    </div>
+    <div class="kpi-card transit">
+      <div class="kpi-label">En Travesía Marítima</div>
+      <div class="kpi-value">{{ shipmentService.inTransitContainers() }}</div>
+      <div class="kpi-hint">Navegando hacia destino</div>
+    </div>
+    <div class="kpi-card success">
+      <div class="kpi-label">Nacionalizados en Bodega</div>
+      <div class="kpi-value">{{ shipmentService.clearedContainers() }}</div>
+      <div class="kpi-hint">Listos para distribución</div>
+    </div>
+  </section>
+
+  <!-- Panel Dividido (Shipments vs Chat IA) -->
+  <div class="workspace-grid">
+    <!-- Panel Izquierdo: Contenedores -->
+    <main class="shipments-panel">
+      <div class="panel-header">
+        <h2>📦 Monitoreo de Contenedores</h2>
+        <div class="tab-filters">
+          <button [class.active]="selectedTab() === 'all'" (click)="selectedTab.set('all')">Todos</button>
+          <button [class.active]="selectedTab() === 'delayed'" (click)="selectedTab.set('delayed')">En Inspección</button>
+          <button [class.active]="selectedTab() === 'in_transit'" (click)="selectedTab.set('in_transit')">En Tránsito</button>
+          <button class="btn-refresh" (click)="shipmentService.loadShipments()" title="Recargar">🔄</button>
+        </div>
+      </div>
+
+      @if (shipmentService.loading()) {
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <p>Consultando catálogo de contenedores desde PostgreSQL...</p>
+        </div>
+      } @else if (shipmentService.error()) {
+        <div class="error-banner">
+          ⚠️ {{ shipmentService.error() }}
+        </div>
+      } @else {
+        <div class="cards-list">
+          @for (shipment of filteredShipments(); track shipment.id) {
+            <article class="shipment-card" [class.delayed]="shipment.delayedInCustoms">
+              <div class="card-header">
+                <div>
+                  <span class="container-code">{{ shipment.containerNumber }}</span>
+                  <span class="shipping-line">{{ shipment.shippingLine }}</span>
+                </div>
+                <span class="badge" [ngClass]="{
+                  'badge-warning': shipment.status === 'EN_INSPECCION_DIAN',
+                  'badge-info': shipment.status === 'EN_TRANSITO_MARITIMO',
+                  'badge-success': shipment.status === 'NACIONALIZADO_EN_BODEGA'
+                }">
+                  {{ shipment.statusDescription }}
+                </span>
+              </div>
+
+              <div class="route-timeline">
+                <div class="route-point">
+                  <span class="route-city">{{ shipment.originPort }}</span>
+                  <span class="route-date">Salida: {{ shipment.departureDate }}</span>
+                </div>
+                <div class="route-arrow">➔</div>
+                <div class="route-point">
+                  <span class="route-city">{{ shipment.destinationPort }}</span>
+                  <span class="route-date">ETA: {{ shipment.estimatedArrivalDate }}</span>
+                </div>
+              </div>
+
+              @if (shipment.customsNotes) {
+                <div class="notes-box">
+                  <strong>Novedad Aduanera:</strong> {{ shipment.customsNotes }}
+                </div>
+              }
+
+              <!-- Manifiesto de Carga -->
+              <div class="manifest-section">
+                <h4>Manifiesto de Carga ({{ shipment.items.length }} productos):</h4>
+                <div class="items-table">
+                  @for (item of shipment.items; track item.productSku) {
+                    <div class="item-row">
+                      <span class="item-sku">{{ item.productSku }}</span>
+                      <span class="item-name">{{ item.productName }}</span>
+                      <span class="item-qty">{{ item.quantity | number }} uds</span>
+                      <span class="item-po">{{ item.purchaseOrder }}</span>
+                    </div>
+                  }
+                </div>
+              </div>
+            </article>
+          } @empty {
+            <p class="empty-msg">No hay contenedores bajo este filtro.</p>
+          }
+        </div>
+      }
+    </main>
+
+    <!-- Panel Derecho: Asistente IA Conversacional -->
+    <aside class="chat-panel">
+      <div class="panel-header">
+        <h2>🤖 Asistente de IA (LangGraph)</h2>
+      </div>
+
+      <!-- Sugerencias rápidas -->
+      <div class="quick-chips">
+        @for (query of quickQueries; track query) {
+          <button class="chip" (click)="useQuickQuery(query)">{{ query }}</button>
+        }
+      </div>
+
+      <!-- Mensajes del Chat -->
+      <div class="chat-messages">
+        @for (msg of chatService.messages(); track $index) {
+          <div class="message-bubble" [class.user]="msg.sender === 'user'" [class.agent]="msg.sender === 'agent'">
+            <div class="msg-header">
+              <span class="sender-name">{{ msg.sender === 'user' ? '👤 Tú' : '🤖 Asistente Logístico' }}</span>
+              <span class="msg-time">{{ msg.timestamp | date:'shortTime' }}</span>
+            </div>
+            <div class="msg-content" [innerHTML]="renderMarkdown(msg.text)"></div>
+
+            <!-- Auditoría de pasos de LangGraph (Tool Calling) -->
+            @if (msg.steps && msg.steps.length > 0) {
+              <div class="audit-accordion">
+                <button class="audit-toggle" (click)="toggleAudit($index)">
+                  🔍 Herramientas ejecutadas en BD ({{ msg.steps.length }})
+                  <span>{{ expandedAuditIndex() === $index ? '▲' : '▼' }}</span>
+                </button>
+
+                @if (expandedAuditIndex() === $index) {
+                  <div class="audit-content">
+                    @for (step of msg.steps; track step.toolName) {
+                      <div class="step-card">
+                        <div class="step-tool"><strong>Tool: </strong> <code>{{ step.toolName }}</code></div>
+                        <div class="step-args"><strong>Argumentos: </strong> <code>{{ step.arguments | json }}</code></div>
+                        <div class="step-output">
+                          <strong>Salida SQL:</strong>
+                          <pre>{{ formatJson(step.output) }}</pre>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+
+        @if (chatService.loading()) {
+          <div class="message-bubble agent typing">
+            <span class="dot-pulse"></span>
+            El agente está analizando la base de datos y razonando con Gemini...
+          </div>
+        }
+      </div>
+
+      <!-- Barra de Entrada -->
+      <form class="chat-input-bar" (ngSubmit)="sendChat()">
+        <input 
+          type="text" 
+          placeholder="Escribe tu consulta sobre contenedores, productos o aduana..."
+          [ngModel]="userPrompt()"
+          (ngModelChange)="userPrompt.set($event)"
+          name="prompt"
+          [disabled]="chatService.loading()"
+        />
+        <button type="submit" [disabled]="!userPrompt().trim() || chatService.loading()">
+          Enviar
+        </button>
+      </form>
+    </aside>
+  </div>
+</div>
